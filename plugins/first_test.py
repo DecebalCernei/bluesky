@@ -40,59 +40,52 @@ class Example(core.Entity):
     def __init__(self):
         super().__init__()
 
-    # You can create new stack commands with the stack.command decorator.
-    # By default, the stack command name is set to the function name.
-    # The default argument type is a case-sensitive word. You can indicate different
-    # types using argument annotations. This is done in the below function:
-    # - The acid argument is a BlueSky-specific argument with type 'acid'.
-    #       This converts callsign to the corresponding index in the traffic arrays.
-    # - The count argument is a regular int.
-    @stack.command
-    def passengers(self, acid: 'acid', count: int = -1):
-        ''' Set the number of passengers on aircraft 'acid' to 'count'. '''
-        if count < 0:
-            return True, f'Aircraft {traf.id[acid]} currently has {self.npassengers[acid]} passengers on board.'
-
-        self.npassengers[acid] = count
-        return True, f'The number of passengers on board {traf.id[acid]} is set to {count}.'
-
 
     @stack.command
     def scan(self, acid: 'acid'):
         # return number of drones only near by (no other types of aircraft)
         ''' Scan for drones near by '''
-        drones = []
-        reachable_drones = []
-        i = 0
-        master = 0
-        for aircraft in traf.type:
-            if is_drone(aircraft):
-                if traf.id[acid] == traf.id[i]:
-                    master = i
-                if master != i:
-                    distance = haversine(traf.lon[master], traf.lat[master], traf.lon[i], traf.lat[i])
-                    # print(f'The drone {traf.id[i]} has distance from ours {distance}')
-                    drones.append(i)
-                    if distance < max_distance:
-                        reachable_drones.append(i)
-            i += 1
-        return True, f'Drone {traf.id[acid]} currently has {len(drones)} drones near by of which {len(reachable_drones)} are reachable.'
+        drones = reachable_drones(acid)
+        """
+        print(f'The drones reachable from {traf.id[acid]} are:')
+        for drone in drones:
+            print(traf.id[drone])
+        """
+        return True, f'Drone {traf.id[acid]} currently has {len(drones)} reachable drones near by.'
 
 
     @stack.command
     def ping(self, acid_sender: 'acid', acid_receiver: 'acid'):
         # 'ping' a specific drone
         message = True, f'Drone {traf.id[acid_sender]} could not reach {traf.id[acid_receiver]}'
-        if is_drone(traf.type[acid_sender]) is False:
-            message = False, f'Aircraft {traf.id[acid_sender]} is not a drone'
-        elif is_drone(traf.type[acid_receiver]) is False:
-            message = False, f'Aircraft {traf.id[acid_receiver]} is not a drone'
-        else:
-            if success_prob() > 0.1:
-                message = True, f'Drone {traf.id[acid_sender]} successfully reached drone {traf.id[acid_receiver]}'
+        available_drones = reachable_drones(acid_sender)
+        if acid_receiver in available_drones:
+            if is_drone(traf.type[acid_sender]) is False:
+                message = False, f'Aircraft {traf.id[acid_sender]} is not a drone'
+            elif is_drone(traf.type[acid_receiver]) is False:
+                message = False, f'Aircraft {traf.id[acid_receiver]} is not a drone'
             else:
-                print('packet loss in transit')
+                # hard threshold -> in future a proper protocol
+                if success_prob() > 0.1:
+                    message = True, f'Drone {traf.id[acid_sender]} successfully reached drone {traf.id[acid_receiver]}'
+                else:
+                    print('packet loss in transit')
         return message
+
+
+def reachable_drones(drone):
+    reachable_aircrafts = []
+    reachable_drones = []
+    i = 0
+    for aircraft in traf.type:
+        if traf.id[drone] != traf.id[i]: #don't append itself
+            distance = haversine(traf.lon[drone], traf.lat[drone], traf.lon[i], traf.lat[i])
+            if distance < max_distance:
+                reachable_aircrafts.append(i)
+                if is_drone(traf.type[i]):
+                    reachable_drones.append(i)
+        i += 1
+    return reachable_drones
 
 
 def haversine(lon1, lat1, lon2, lat2):
