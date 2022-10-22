@@ -55,6 +55,20 @@ class Example(core.Entity):
 
 
     @stack.command
+    def tower(self, lat: 'lat', lon: 'lon'):
+        # return number of drones only near by (no other types of aircraft)
+        ''' Scan for drones near by '''
+        drones = from_tower(lat, lon)
+        """
+        print(f'The drones reachable from {traf.id[acid]} are:')
+        for drone in drones:
+            print(traf.id[drone])
+        """
+        return True, f'Tower at {lat}, {lon} currently has {len(drones)} reachable drones near by.'
+
+
+
+    @stack.command
     def ping(self, acid_sender: 'acid', acid_receiver: 'acid'):
         # 'ping' a specific drone
         message = True, f'Drone {traf.id[acid_sender]} could not reach {traf.id[acid_receiver]}'
@@ -84,6 +98,20 @@ def reachable_drones(drone):
                 reachable_aircrafts.append(i)
                 if is_drone(traf.type[i]):
                     reachable_drones.append(i)
+        i += 1
+    return reachable_drones
+
+
+def from_tower(lat, lon):
+    reachable_aircrafts = []
+    reachable_drones = []
+    i = 0
+    for aircraft in traf.type:
+        distance = haversine(lon, lat, traf.lon[i], traf.lat[i])
+        if distance < max_distance:
+            reachable_aircrafts.append(i)
+            if is_drone(traf.type[i]):
+                reachable_drones.append(i)
         i += 1
     return reachable_drones
 
