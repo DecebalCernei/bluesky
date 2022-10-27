@@ -5,8 +5,9 @@ from random import randint
 from xmlrpc.client import FastMarshaller
 import numpy as np
 # Import the global bluesky objects. Uncomment the ones you need
-from bluesky import core, stack, traf  #, settings, navdb, sim, scr, tools
-max_distance = 2
+from bluesky import core, stack, traf, navdb  #, settings, sim, scr, tools
+
+max_distance = 2000
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
@@ -60,7 +61,7 @@ class Example(core.Entity):
         ''' Scan for drones near by '''
         drones = from_tower(lat, lon)
         """
-        print(f'The drones reachable from {traf.id[acid]} are:')
+        print(f'The drones reachable from tower at {lat}, {lon} are:')
         for drone in drones:
             print(traf.id[drone])
         """
@@ -85,6 +86,25 @@ class Example(core.Entity):
                 else:
                     print('packet loss in transit')
         return message
+
+
+    @stack.command
+    def broadcast(self, acid_sender: 'acid'):
+        # propagate a message
+        distance_reached = 0
+        drones = create_graph()
+        already_visited = set()
+        stack.stack('ECHO starting broadcast')
+        for drone in drones:
+            for neighbour in drone.neighbours:
+                if neighbour not in already_visited:
+                    distance = haversine(traf.lon[acid_sender], traf.lat[acid_sender], traf.lon[neighbour], traf.lat[neighbour])
+                    if distance > distance_reached:
+                        distance_reached = distance
+                    stack.stack(f'PING {traf.id[drone.acid]} {traf.id[neighbour]}')
+                    already_visited.add(drone.acid)
+            
+        return True, f'we reached a total number of {len(already_visited)} drones, with a total distance of {distance_reached} meters'
 
 
 def reachable_drones(drone):
@@ -118,7 +138,7 @@ def from_tower(lat, lon):
 
 def haversine(lon1, lat1, lon2, lat2):
     """
-    Calculate the great circle distance in kilometers between two points 
+    Calculate the great circle distance in meters between two points 
     on the earth (specified in decimal degrees)
     """
     # convert decimal degrees to radians 
@@ -130,7 +150,7 @@ def haversine(lon1, lat1, lon2, lat2):
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a)) 
     r = 6371 # Radius of earth in kilometers. Use 3956 for miles. Determines return value units.
-    return c * r
+    return c * r * 1000
 
 
 def is_drone(aircraft_type):
@@ -151,3 +171,19 @@ def success_prob():
     """
     prob = randint(0, 100) / 100
     return prob
+
+
+def create_graph():
+    drones = []
+    for aircraft in traf.id:
+        acid = traf.id2idx(aircraft)
+        if is_drone(traf.type[acid]):
+            d = Drone(acid)
+            drones.append(d)
+    return drones
+
+
+class Drone():
+    def __init__(self, acid):
+        self.acid = acid
+        self.neighbours = reachable_drones(acid)
