@@ -17,9 +17,11 @@
 0:00:00.00>scan maven01
 0:00:02.00>ping maven01 maven02
 
-0:00:03.00>move maven02 45.064986, 8.330566
+0:00:03.00>move maven02 eham
 
 0:00:04.00>scan maven01
 0:00:05.00>ping maven01 maven02
 
-0:00:08.00>tower 45.064986, 8.330566
+0:00:08.00>tower eham
+
+0:00:09.30>broadcast maven01
