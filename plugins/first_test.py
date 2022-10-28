@@ -1,13 +1,19 @@
 """ First test to display number of drones in an area of 200 meters """
 from math import radians, cos, sin, asin, sqrt
 from operator import is_
+from queue import Empty
 from random import randint
 from xmlrpc.client import FastMarshaller
 import numpy as np
 # Import the global bluesky objects. Uncomment the ones you need
 from bluesky import core, stack, traf, navdb  #, settings, sim, scr, tools
+import modules.configuration as configuration
 
-max_distance = 2000
+conf = configuration.get_conf("plugins/config/communication.conf")
+
+max_distance = int(conf['max_distance'])
+
+
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
@@ -81,7 +87,7 @@ class Example(core.Entity):
                 message = False, f'Aircraft {traf.id[acid_receiver]} is not a drone'
             else:
                 # hard threshold -> in future a proper protocol
-                if success_prob() > 0.1:
+                if hard_threshold():
                     message = True, f'Drone {traf.id[acid_sender]} successfully reached drone {traf.id[acid_receiver]}'
                 else:
                     print('packet loss in transit')
@@ -89,22 +95,36 @@ class Example(core.Entity):
 
 
     @stack.command
-    def broadcast(self, acid_sender: 'acid'):
-        # propagate a message
-        distance_reached = 0
-        drones = create_graph()
-        already_visited = set()
-        stack.stack('ECHO starting broadcast')
-        for drone in drones:
-            for neighbour in drone.neighbours:
-                if neighbour not in already_visited:
-                    distance = haversine(traf.lon[acid_sender], traf.lat[acid_sender], traf.lon[neighbour], traf.lat[neighbour])
-                    if distance > distance_reached:
-                        distance_reached = distance
-                    stack.stack(f'PING {traf.id[drone.acid]} {traf.id[neighbour]}')
-                    already_visited.add(drone.acid)
-            
-        return True, f'we reached a total number of {len(already_visited)} drones, with a total distance of {distance_reached} meters'
+    def distance(self, lat1:'lat', lon1: 'lon', lat2: 'lat', lon2: 'lon'):
+        d = haversine(lon1, lat1, lon2, lat2)
+        return True, f'The distance is {d} m'
+
+
+    @stack.command
+    def broadcast(self, acid: 'acid'):
+        first_group = reachable_drones(acid)
+        drones = []
+        reached = set()
+        reached.add(acid)
+        for drone in first_group:
+            if hard_threshold():
+                drones.append(drone)
+                reached.add(drone)
+        while len(drones) != 0:
+            drone = drones.pop(0)
+            neighbours = reachable_drones(drone)
+            for neighbour in neighbours:
+                if hard_threshold():
+                    if neighbour not in reached:
+                        drones.append(neighbour)
+                        reached.add(neighbour)
+        chain = 0
+        for i in reached:
+            current = haversine(traf.lon[acid], traf.lat[acid], traf.lon[i], traf.lat[i])
+            if current > chain:
+                chain = current
+        return True, f'We arrived {chain} meters away with our message!'
+
 
 
 def reachable_drones(drone):
@@ -165,25 +185,13 @@ def is_drone(aircraft_type):
     return drone
 
 
-def success_prob():
+def hard_threshold():
     """
-    return a success probability rate, todo implementation of a smarter protocol
+    return True if prob is > loss (hard threshold)
     """
+    loss = float(conf['packet_loss_prob'])
+    success = False
     prob = randint(0, 100) / 100
-    return prob
-
-
-def create_graph():
-    drones = []
-    for aircraft in traf.id:
-        acid = traf.id2idx(aircraft)
-        if is_drone(traf.type[acid]):
-            d = Drone(acid)
-            drones.append(d)
-    return drones
-
-
-class Drone():
-    def __init__(self, acid):
-        self.acid = acid
-        self.neighbours = reachable_drones(acid)
+    if prob > loss:
+        success = True
+    return success
