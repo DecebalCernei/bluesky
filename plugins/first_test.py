@@ -1,8 +1,7 @@
-""" First test to display number of drones in an area of 200 meters """
-from math import radians, cos, sin, asin, sqrt
+from math import radians, cos, sin, asin, sqrt, log10
 from operator import is_
 from queue import Empty
-from random import randint
+from random import random, uniform
 from xmlrpc.client import FastMarshaller
 import numpy as np
 # Import the global bluesky objects. Uncomment the ones you need
@@ -191,7 +190,67 @@ def hard_threshold():
     """
     loss = float(conf['packet_loss_prob'])
     success = False
-    prob = randint(0, 100) / 100
+    prob = random()
     if prob > loss:
+        success = True
+    return success
+
+
+def fspl(distance):
+    """
+    Free Space Path Loss
+
+    Indicates The power loss for the radiated signal after it has travelled distance km
+    """
+    max_pathloss = float(conf['max_pathloss_fspl'])
+    frequency = float(conf['frequency']) # expressed in GHz
+    pathloss = 20 * log10(distance) + 20 * log10(frequency) + 92.45
+    success = False
+    if pathloss < max_pathloss:
+        success = True
+    return success
+
+
+def cpl(altitude, distance):
+    """
+    Cellular Path Loss 
+
+    As presented in https://ieeexplore.ieee.org/document/7936620 (800 MHz frequency band used)
+    """
+    max_pathloss = float(conf['max_pathloss_cpl'])
+    cellular_frequency = float(conf['cellular_frequency']) #expressed in GHz
+    mu = 20 * log10(distance) + 20 * log10(cellular_frequency)
+    if altitude < 1.5:
+        alpha = 3.7
+        beta = -1.3
+        sigma = 7.7
+    elif altitude < 15:
+        alpha = 2.9
+        beta = 7.4
+        sigma = 6.2
+    elif altitude < 15:
+        alpha = 2.5
+        beta = 20.4
+        sigma = 5.2
+    elif altitude < 15:
+        alpha = 2.1
+        beta = 32.8
+        sigma = 4.4
+    elif altitude < 120:
+        alpha = 2.0
+        beta = 35.3
+        sigma = 3.4
+    else:
+        """
+        Free Space Path Loss for altitudes above 120 meters
+        """
+        alpha = 2.0
+        beta = log10(cellular_frequency)
+        sigma = 0
+
+    minus_sigma = 0 - sigma
+    pathloss = alpha * 10 * log10(distance) + beta + uniform(minus_sigma, sigma)
+    success = False
+    if pathloss < max_pathloss:
         success = True
     return success
