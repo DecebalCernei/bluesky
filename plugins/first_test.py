@@ -10,7 +10,8 @@ import modules.configuration as configuration
 
 conf = configuration.get_conf("plugins/config/communication.conf")
 
-max_distance = int(conf['max_distance'])
+max_distance_drone = int(conf['max_distance_drone'])
+max_distance_station = int(conf['max_distance_station'])
 mode = str(conf['mode'])
 
 
@@ -109,60 +110,74 @@ class Example(core.Entity):
 
     @stack.command
     def drone(self, lat:'lat', lon: 'lon'):
-        aircrafts = is_aircraft(lat, lon)
-        if len(aircrafts) > 0 :
-            aircraft = is_aircraft(lat, lon).pop()
+        flag, aircraft = is_aircraft(lat, lon)
+        if flag == True & is_drone(traf.type[aircraft]):
             return True, f'The coordinates {lat}, {lon} correspond to the {traf.id[aircraft]} drone!'
         else:
             return True, f'The coordinates {lat}, {lon} do not correspond to a drone'
 
 
     @stack.command
+    def altitud(self, acid:'acid'):
+        return True, f'altitude of {traf.id[acid]} is {traf.alt[acid]}'
+
+
+    @stack.command
     def broadcast(self, lat:'lat', lon: 'lon'):
-        aircraft = is_aircraft(lat, lon)
-        acid = -1
-        if len(aircraft) > 0:
-            acid = aircraft.pop()
-            first_group = reachable_drones(acid)
+        flag, acid = is_aircraft(lat, lon)
+        if flag:
+            if is_drone(traf.type[acid]):
+                first_group = reachable_drones(acid)
+            else:
+                return True, f'The specified aircraft can not communicate with drones \n(HINT: is it a drone?)'
         else:
             first_group = from_tower(lat, lon)
         drones = []
-        reached = set()
+        reached = set() # all reached drones 
         if acid != -1:
             reached.add(acid)
         for drone in first_group:
+            should_add = False
             if mode == 'hard_threshold':
                 if hard_threshold():
-                    drones.append(drone)
-                    reached.add(drone)
+                    should_add = True
             elif mode == 'cellular':
                 distance = haversine(lon, lat, traf.lon[drone], traf.lat[drone])
-                if fspl(distance):
-                    drones.append(drone)
-                    reached.add(drone)
+                if acid == -1:
+                    # The broadcast is launched by a station
+                    print(f'From station, calling cpl({traf.alt[drone]}, {distance})')
+                    if cpl(traf.alt[drone], distance):
+                        should_add = True
+                else:
+                    if fspl(distance):
+                        should_add = True
+            if should_add:
+                drones.append(drone)
+                reached.add(drone)
         while len(drones) != 0:
             drone = drones.pop(0)
             neighbours = reachable_drones(drone)
             for neighbour in neighbours:
+                should_add = False
                 if mode == 'hard_threshold':
                     if hard_threshold():
-                        if neighbour not in reached:
-                            drones.append(neighbour)
-                            reached.add(neighbour)
+                        should_add = True
                 elif mode == 'cellular':
                     distance = haversine(traf.lon[drone], traf.lat[drone], traf.lon[neighbour], traf.lat[neighbour])
                     print(f' calling fspl from {traf.id[drone]} to {traf.id[neighbour]}')
                     if fspl(distance):
-                        if neighbour not in reached:
+                        should_add = True
+                if should_add:
+                    if neighbour not in reached:
                             drones.append(neighbour)
-                            reached.add(neighbour) 
+                            reached.add(neighbour)
+        
         chain = 0
         for i in reached:
             current = haversine(lon, lat, traf.lon[i], traf.lat[i])
             if current > chain:
                 chain = current
         return True, f'We arrived {chain} meters away with our message!'
-
 
 
 def reachable_drones(drone):
@@ -172,7 +187,7 @@ def reachable_drones(drone):
     for aircraft in traf.type:
         if traf.id[drone] != traf.id[i]: #don't append itself
             distance = haversine(traf.lon[drone], traf.lat[drone], traf.lon[i], traf.lat[i])
-            if distance < max_distance:
+            if distance < max_distance_drone:
                 reachable_aircrafts.append(i)
                 if is_drone(traf.type[i]):
                     reachable_drones.append(i)
@@ -186,7 +201,7 @@ def from_tower(lat, lon):
     i = 0
     for aircraft in traf.type:
         distance = haversine(lon, lat, traf.lon[i], traf.lat[i])
-        if distance < max_distance:
+        if distance < max_distance_station:
             reachable_aircrafts.append(i)
             if is_drone(traf.type[i]):
                 reachable_drones.append(i)
@@ -198,15 +213,15 @@ def haversine(lon1, lat1, lon2, lat2):
     """
     Calculate the great circle distance in meters between two points 
     on the earth (specified in decimal degrees)
+    ref: https://stackoverflow.com/questions/4913349/haversine-formula-in-python-bearing-and-distance-between-two-gps-points
     """
-    # convert decimal degrees to radians 
+    # convert decimal degrees to radians
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-
     # haversine formula 
-    dlon = lon2 - lon1 
-    dlat = lat2 - lat1 
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a)) 
+    c = 2 * asin(sqrt(a))
     r = 6371 # Radius of earth in kilometers. Use 3956 for miles. Determines return value units.
     return c * r * 1000
 
@@ -269,11 +284,11 @@ def cpl(altitude, distance):
         alpha = 2.9
         beta = 7.4
         sigma = 6.2
-    elif altitude < 15:
+    elif altitude < 30:
         alpha = 2.5
         beta = 20.4
         sigma = 5.2
-    elif altitude < 15:
+    elif altitude < 60:
         alpha = 2.1
         beta = 32.8
         sigma = 4.4
@@ -291,6 +306,7 @@ def cpl(altitude, distance):
 
     minus_sigma = 0 - sigma
     pathloss = alpha * 10 * log10(distance) + beta + uniform(minus_sigma, sigma)
+    print(f'Pathloss is {pathloss}')
     success = False
     if pathloss < max_pathloss:
         success = True
@@ -303,4 +319,9 @@ def is_aircraft(lat, lon):
     if len(x[0]) > 0:
         y = np.where(traf.lon == lon)
         result = set(x[0]).intersection(y[0])
-    return result
+    if len(result)>0:
+        # Means that is an aircraft, return True and the index
+        return True, result.pop()
+    else:
+        # Not an aircraft
+        return False, -1
