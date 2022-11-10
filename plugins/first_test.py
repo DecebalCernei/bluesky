@@ -15,6 +15,19 @@ max_distance_station = int(conf['max_distance_station'])
 mode = str(conf['mode'])
 
 
+# Ground stations as id: lat, lon
+def load_ground_stations():
+    ground_stations = {}
+    ground_stations['GS01'] = [44.925955, 7.835697]
+    ground_stations['GS02'] = [44.919209, 7.818958]
+    ground_stations['GS03'] = [44.913314, 7.801235]
+    return ground_stations
+
+
+# Create a list of available ground stations... In future read from file and maybe integrate navdb
+ground_stations = load_ground_stations()
+
+
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
@@ -48,57 +61,91 @@ class Example(core.Entity):
     def __init__(self):
         super().__init__()
 
+    for gs in ground_stations:
+        print(f'ground station {gs} has coordinates: {ground_stations.get(gs)[0]}, {ground_stations.get(gs)[1]}')
+
 
     @stack.command
     def scan(self, lat: 'lat', lon: 'lon'):
         # return number of drones near by (no other types of aircraft)
         ''' Scan for drones near by '''
-        aircraft = is_aircraft(lat, lon)
-        print(aircraft)
+        flag, acid = is_aircraft(lat, lon)
         
-        # to-do: there could be a station at the same coordinates...
-        if len(aircraft) > 0:
-            acid = aircraft.pop()
-            drones = reachable_drones(acid)
-            flag = 'Drone'
-        else:
-            drones = from_tower(lat, lon)
-            flag = 'Station'
+        drones = reachable_drones(lat, lon)
+        ground_stations = reachable_gstations(lat, lon)
+
         """
         print(f'The reachable drones are:')
         for drone in drones:
             print(traf.id[drone])
         """
-        return True, f'Specified {flag} currently has {len(drones)} reachable drones near by.'
+        return True, f'Currently has {len(drones)} reachable drones and {len(ground_stations)} ground stations near by.'
 
 
     @stack.command
-    def ping(self, lat: 'lat', lon: 'lon', acid_receiver: 'acid'):
+    def ping(self, lat1: 'lat', lon1: 'lon', lat2: 'lat', lon2: 'lon'):
         # 'ping' a specific drone
-        message = True, f'Could not reach {traf.id[acid_receiver]}'
-        aircraft = is_aircraft(lat, lon)
-        print(aircraft)
-        if len(aircraft) > 0:
-            acid_sender = aircraft.pop()
-            available_drones = reachable_drones(acid_sender)
+        message = True, f'Could not reach destination'
+        flag1, acid_sender = is_aircraft(lat1, lon1)
+        flag2, acid_receiver = is_aircraft(lat2, lon2)
+        is_sender_station, sender_station = is_gstation(lat1, lon1)
+        is_receiver_station, receiver_station = is_gstation(lat2, lon2)
+        available_drones = reachable_drones(lat1, lon1)
+        available_gs = reachable_gstations(lat1, lon1)
+        destination = 'wrong'
+        source = 'wrong'
+        if flag1:
+            source = 'drone'
+        elif is_sender_station:
+            source = 'gstation'
+        if source == 'wrong':
+            message = True, f'Specified sender is neither a drone nor a ground station'
         else:
-            available_drones = from_tower(lat, lon)
-        
-        if acid_receiver in available_drones:
-            if is_drone(traf.type[acid_receiver]) is False:
-                message = False, f'Aircraft {traf.id[acid_receiver]} is not a drone'
-            else:
+            if flag2 & (acid_receiver in available_drones):
+                destination = 'drone'
+            elif is_receiver_station:
+                destination = 'gstation'
+            if destination in ['drone', 'gstation']:
                 if mode == 'hard_threshold':
                     if hard_threshold():
-                        message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                        if destination == 'drone':
+                            message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                        else:
+                            message = True, f'Successfully reached ground station {receiver_station}'
+                    else:
+                        print('packet loss in transit')
+                elif mode == 'free_space':
+                    distance = haversine(lon1, lat1, lon2, lat2)
+                    if fspl(distance):
+                        if destination == 'drone':
+                            message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                        else:
+                            message = True, f'Successfully reached ground station {receiver_station}'
                     else:
                         print('packet loss in transit')
                 elif mode == 'cellular':
-                    distance = haversine(lon, lat, traf.lon[acid_receiver], traf.lat[acid_receiver])
-                    if fspl(distance):
-                        message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                    distance = haversine(lon1, lat1, lon2, lat2)
+                    if source == 'drone':
+                        if fspl(distance):
+                            if destination == 'drone':
+                                message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                            else:
+                                message = True, f'Successfully reached ground station {receiver_station}'
+                        else:
+                            print('packet loss in transit')
                     else:
-                        print('packet loss in transit')
+                        if destination == 'drone':
+                            if cpl(traf.alt[acid_receiver], distance):
+                                message = True, f'Successfully reached drone {traf.id[acid_receiver]}'
+                            else:
+                                print('packet loss in transit')
+                        else:
+                            if cpl(0, distance):
+                                message = True, f'Successfully reached ground station {receiver_station}'
+                            else:
+                                print('packet loss in transit')
+            else:
+                message = True, f'Specified destination is neither a drone nor a ground station'
         return message
 
 
@@ -109,7 +156,7 @@ class Example(core.Entity):
 
 
     @stack.command
-    def drone(self, lat:'lat', lon: 'lon'):
+    def drone(self, lat: 'lat', lon: 'lon'):
         flag, aircraft = is_aircraft(lat, lon)
         if flag == True & is_drone(traf.type[aircraft]):
             return True, f'The coordinates {lat}, {lon} correspond to the {traf.id[aircraft]} drone!'
@@ -123,71 +170,152 @@ class Example(core.Entity):
 
 
     @stack.command
+    def stations(self, lat: 'lat', lon: 'lon'):
+        gs = reachable_gstations(lat, lon)
+        return True, f'reachable ground stations: {gs}'
+
+
+    @stack.command
     def broadcast(self, lat:'lat', lon: 'lon'):
         flag, acid = is_aircraft(lat, lon)
-        if flag:
-            if is_drone(traf.type[acid]):
-                first_group = reachable_drones(acid)
-            else:
-                return True, f'The specified aircraft can not communicate with drones \n(HINT: is it a drone?)'
+        is_sender_station, sender_station = is_gstation(lat, lon)
+        arrived_packets = 0
+        sent_packets = 0
+        if (not flag) and (not is_sender_station):
+            return True, f'Specified sender can not communicate with drones \n(HINT: is it a drone or a ground station?)'
         else:
-            first_group = from_tower(lat, lon)
-        drones = []
-        reached = set() # all reached drones 
+            first_group = reachable_drones(lat, lon) + reachable_gstations(lat, lon)
+        nodes = [] 
+        reached = set() # all reached nodes
         if acid != -1:
-            reached.add(acid)
-        for drone in first_group:
+            reached.add(int(acid))
+        for node in first_group:
             should_add = False
+            # We are dealing with a drone
+            print(f'type of node={node} is {type(node)}')
+            if type(node) is int:
+                 
+                distance = haversine(lon, lat, traf.lon[node], traf.lat[node])
+                altitude = traf.alt[node]
+            # With a ground station
+            else:
+                lat_gstation, lon_gstation = get_gstation_pos(node)
+                distance = haversine(lon, lat, lon_gstation, lat_gstation)
+                altitude = 0
             if mode == 'hard_threshold':
                 if hard_threshold():
                     should_add = True
+                    arrived_packets += 1
+                sent_packets += 1
             elif mode == 'cellular':
-                distance = haversine(lon, lat, traf.lon[drone], traf.lat[drone])
-                if acid == -1:
+                if is_sender_station:
                     # The broadcast is launched by a station
-                    print(f'From station, calling cpl({traf.alt[drone]}, {distance})')
-                    if cpl(traf.alt[drone], distance):
+                    if cpl(altitude, distance):
                         should_add = True
                 else:
                     if fspl(distance):
                         should_add = True
+            elif mode == 'free_space':
+                # If mode is free_space we use fspl for both station and drones
+                if fspl(distance):
+                    should_add = True
+                    arrived_packets += 1
+                sent_packets += 1
             if should_add:
-                drones.append(drone)
-                reached.add(drone)
-        while len(drones) != 0:
-            drone = drones.pop(0)
-            neighbours = reachable_drones(drone)
+                nodes.append(node)
+                reached.add(node)
+        while len(nodes) != 0:
+            node = nodes.pop(0)
+            # Node is a drone
+            print(f'type of node={node} is {type(node)}')
+            if type(node) is int:
+                 
+                lat_node = traf.lat[node]
+                lon_node = traf.lon[node]
+                print(f'node is {traf.id[node]}')
+            # Node is a ground station
+            else:
+                lat_node, lon_node = get_gstation_pos(node)
+                print(f'node is {node}')
+            neighbours = reachable_drones(lat_node, lon_node) + reachable_gstations(lat_node, lon_node)
             for neighbour in neighbours:
+                print(f'neighbour is {neighbour}')
                 should_add = False
+                # Neighbour is a drone
+                print(f'type of neighbour={neighbour} is {type(neighbour)}')
+                if type(neighbour) is int:
+                     
+                    node_is = 'drone'
+                    print(f'from {lon_node}, {lat_node} to {traf.lon[neighbour]}, {traf.lat[neighbour]}')
+                    distance = haversine(lon_node, lat_node, traf.lon[neighbour], traf.lat[neighbour])
+                    altitude = traf.alt[neighbour]
+                # Neighbour is a ground station
+                else:
+                    node_is = 'gstation'
+                    lat_neighbour, lon_neighbour = get_gstation_pos(neighbour)
+                    distance = haversine(lon_node, lat_node, lon_neighbour, lat_neighbour)
+                    altitude = 0
                 if mode == 'hard_threshold':
                     if hard_threshold():
                         should_add = True
+                        arrived_packets += 1
+                    sent_packets += 1
                 elif mode == 'cellular':
-                    distance = haversine(traf.lon[drone], traf.lat[drone], traf.lon[neighbour], traf.lat[neighbour])
-                    print(f' calling fspl from {traf.id[drone]} to {traf.id[neighbour]}')
+                    if node_is == 'drone':
+                        if fspl(distance):
+                            should_add = True
+                            arrived_packets += 1
+                    else:
+                        if cpl(altitude, distance):
+                            should_add = True
+                            arrived_packets += 1
+                    sent_packets += 1
+                elif mode == 'free_space':
                     if fspl(distance):
                         should_add = True
+                        arrived_packets += 1
+                    sent_packets += 1
+                
                 if should_add:
                     if neighbour not in reached:
-                            drones.append(neighbour)
+                            nodes.append(neighbour)
                             reached.add(neighbour)
-        
+        ##############################
         chain = 0
         for i in reached:
-            current = haversine(lon, lat, traf.lon[i], traf.lat[i])
+            # Node is a drone
+            print(f'type of i={i} is {type(i)}')
+            if type(i) is int:
+                 
+                lat_i = traf.lat[i]
+                lon_i = traf.lon[i]
+            # Node is a ground station
+            else:
+                print(f'--- STO CHIEDENDO LE COORDINATE DI: {i} ---')
+                lat_i, lon_i = get_gstation_pos(i)
+            current = haversine(lon, lat, lon_i, lat_i)
             if current > chain:
                 chain = current
-        return True, f'We arrived {chain} meters away with our message!'
+        print(f'arrived/sent packets: {arrived_packets}/{sent_packets}')
+        return True, f'We arrived {chain} meters far with our message!'
 
 
-def reachable_drones(drone):
+def reachable_drones(lat, lon):
     reachable_aircrafts = []
     reachable_drones = []
     i = 0
+    flag, acid = is_aircraft(lat, lon)
     for aircraft in traf.type:
-        if traf.id[drone] != traf.id[i]: #don't append itself
-            distance = haversine(traf.lon[drone], traf.lat[drone], traf.lon[i], traf.lat[i])
-            if distance < max_distance_drone:
+        if flag and (traf.id[acid] == traf.id[i]):
+            #do not add itself
+            pass
+        else:
+            distance = haversine(lon, lat, traf.lon[i], traf.lat[i])
+            if flag:
+                max_distance = max_distance_drone
+            else:
+                max_distance = max_distance_station
+            if distance < max_distance:
                 reachable_aircrafts.append(i)
                 if is_drone(traf.type[i]):
                     reachable_drones.append(i)
@@ -195,18 +323,24 @@ def reachable_drones(drone):
     return reachable_drones
 
 
-def from_tower(lat, lon):
-    reachable_aircrafts = []
-    reachable_drones = []
-    i = 0
-    for aircraft in traf.type:
-        distance = haversine(lon, lat, traf.lon[i], traf.lat[i])
-        if distance < max_distance_station:
-            reachable_aircrafts.append(i)
-            if is_drone(traf.type[i]):
-                reachable_drones.append(i)
-        i += 1
-    return reachable_drones
+def reachable_gstations(lat, lon):
+    reachable_gs = []
+    for gs in ground_stations:
+        should_add = False
+        distance = haversine(lon, lat, ground_stations.get(gs)[1], ground_stations.get(gs)[0])
+        print(f'distance is {distance}')
+        flag, acid = is_aircraft(lat, lon)
+        if flag:
+            if is_drone(traf.type[acid]) & (distance < max_distance_drone):
+                should_add = True
+        else:
+            if distance < max_distance_station:
+                should_add = True
+        if distance == 0:
+            should_add = False # do not append itself
+        if should_add:
+            reachable_gs.append(gs)
+    return reachable_gs
 
 
 def haversine(lon1, lat1, lon2, lat2):
@@ -268,6 +402,7 @@ def fspl(distance):
 
 
 def cpl(altitude, distance):
+    print(f'called cpl{altitude}, {distance}')
     """
     Cellular Path Loss 
 
@@ -325,3 +460,18 @@ def is_aircraft(lat, lon):
     else:
         # Not an aircraft
         return False, -1
+
+
+def is_gstation(lat, lon):
+    result = False
+    gs = -1
+    for gstation in ground_stations:
+        if (ground_stations[gstation][0] == lat) & (ground_stations[gstation][1] == lon):
+            result = True
+            gs = gstation
+    return result, gs
+
+
+def get_gstation_pos(gstation):
+    # lat, lon
+    return ground_stations[gstation][0], ground_stations[gstation][1]
